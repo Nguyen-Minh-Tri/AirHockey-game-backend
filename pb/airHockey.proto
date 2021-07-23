@@ -1,0 +1,105 @@
+syntax = "proto3";
+package AirHockey;
+
+option go_package="/pb";
+
+service AirHockeyService{
+  // waiting list
+  rpc Connect(NewPlayerName) returns (PlayerInfo) {};
+
+  // host and player in room + start -> play game
+  rpc NewRoom(NewGameInfo) returns (RoomID){};
+  rpc JoinRoom(JoinRequest) returns (RoomID){};
+
+  // in game stream actions
+  rpc GameStream(stream GameMessage) returns (stream GameMessage){};
+
+  // optional functions for player
+  rpc GetPlayerList(Empty) returns (PlayerList) {};
+//  rpc LeaveRoom(LeaveRequest) returns (Empty) {};
+  rpc Disconnect(LeaveRequest) returns (Empty) {};
+}
+
+message GameMessage{
+  oneof action{
+      PlayerInput playerInput = 1;
+      EntityState entityState = 2;
+      GameState   gameState   = 3;
+      Empty       empty       = 4;
+  }
+  string sender = 5;
+}
+
+message PlayerInput{
+  Direction direction = 1;
+  string sender = 2;
+  string roomID = 3;
+}
+message EntityState{
+  repeated ObjectState players = 1;
+  ObjectState puck = 2;
+  string sender = 3;
+  string  RoomID = 4;
+}
+
+message GameState{
+  int32 isPlaying = 1;
+  int32 scoreTeam1 = 2;
+  int32 scoreTeam2 = 3;
+  string RoomID = 4;
+}
+
+message LeaveRequest{
+  string RoomID = 1;
+  PlayerInfo playerInfo = 2;
+}
+
+message JoinRequest{
+  string RoomID = 1;
+  PlayerInfo playerInfo = 2;
+}
+
+
+
+message NewGameInfo{
+  int32 numberOfPlayer = 1;
+  int32 targetScore = 2;
+  string  host = 3;
+}
+
+message RoomID{
+  string uniqueID = 1;
+}
+
+message ObjectState{
+  float x = 1;
+  float y = 2;
+  float z = 3;
+  float vx = 4;
+  float vy = 5;
+  float vz = 6;
+}
+
+message Direction{
+  bool UP = 1;
+  bool DOWN = 2;
+  bool LEFT = 3;
+  bool RIGHT = 4;
+}
+
+
+
+message NewPlayerName{
+  string name = 1;
+}
+
+message PlayerInfo{
+  string name = 1;
+  string uuid = 2;
+}
+
+message PlayerList{
+  repeated string players = 1;
+}
+
+message Empty{}
