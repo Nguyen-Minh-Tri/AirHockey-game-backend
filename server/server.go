@@ -1,6 +1,7 @@
 package main
 
 import (
+	"air-hockey-backend/model"
 	"air-hockey-backend/pb"
 	"context"
 	"errors"
@@ -11,7 +12,8 @@ import (
 	"net"
 	"sync"
 )
-
+//important global variable
+var rankList [10]model.PlayerRank
 var lock = &sync.RWMutex{}
 var players = make(map[string]*Player)
 var rooms = make(map[string]*Room)
@@ -33,7 +35,6 @@ type Player struct {
 	uuid 			string
 	WaitGroup 		*sync.WaitGroup
 }
-
 
 func main() {
 	port := ":50069"
@@ -57,29 +58,88 @@ func main() {
 		log.Fatalf("Failed to serve: %v", err)
 	}
 }
+//  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@!!!!!!!!@!@!@!@!!!!!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-func (s *server) Connect(_ context.Context, in *pb.NewPlayerName) (*pb.PlayerInfo, error) {
-	name := in.Name
-	id := uuid.New()
-	AddPlayer(id, name)
-	return &pb.PlayerInfo{Name: name, Uuid: id.String()}, nil
-}
 
-func AddPlayer(id uuid.UUID, name string) {
-	lock.Lock()
-	defer lock.Unlock()
-	newPlayer := &Player{
-		name:      			name,
-		channel: 		 	make(chan pb.GameMessage, 100),
-		WaitGroup:			&sync.WaitGroup{},
-		uuid: 				id.String(),
+func (s *server) NewAccount(_ context.Context, accountReq *pb.NewAccountReq) (*pb.Empty, error){
+	name := accountReq.Name
+	info := accountReq.AccountInfo
+	errorAccount := RegisterHandler(name, info.UserName, info.Password)
+	if errorAccount != nil{
+		return nil, errorAccount
 	}
-	log.Print("[AddClient]: Registered player: " + name)
-	players[id.String()] = newPlayer
+	return &pb.Empty{}, nil
 }
+
+func (s *server) Login(_ context.Context, account *pb.Account) (*pb.LoginPlayerInfo, error) {
+
+	result, errLogin :=LoginHandler(account.UserName, account.Password)
+	if errLogin != nil{
+		return nil, errLogin
+	}
+	AddPlayer(result.PlayerID,account.UserName)
+	log.Print("[AddedPlayer], ", result.Name, result.PlayerID, result.Cash, result.Rank )
+	return &pb.LoginPlayerInfo{Name: result.Name, Uuid: result.PlayerID, Cash: int32(result.Cash), Rank: int32(result.Rank)}, nil
+}
+
+func (s *server) NewRecord(_ context.Context, inRecord *pb.Record) (*pb.RecordID, error) {
+
+	uuid, errNewRec := storeRecord(inRecord)
+	if errNewRec != nil{
+		return nil, errNewRec
+	}
+	// insert record
+	returnID := &pb.RecordID{Uuid: uuid}
+	return returnID, nil
+}
+
+func (s *server) GetGlobalRecord(context.Context, *pb.Empty) (*pb.RankingList, error) {
+	if &rankList == nil{
+		return nil, errors.New("no record found")
+	}
+	var result pb.RankingList
+	for i, _ := range rankList{
+		result.RankingList = append(result.RankingList, &pb.PlayerRank {PlayerName: rankList[i].PlayerName, RankScore : int32(rankList[i].RankScore)})
+	}
+	return &result, nil
+}
+
+func (s *server) UpdateRankAndCash(_ context.Context, rankAndCast *pb.RankAndCash) (*pb.Empty, error){
+	err := changeRankAndCash(rankAndCast)
+	if err == nil{
+		return nil, err
+	}
+	return &pb.Empty{}, nil
+}
+
+func (s *server) AddSkin(_ context.Context, addSkinReq *pb.AddNewSkin) (*pb.SkinList, error){
+	err := playerUpdateSkin(addSkinReq)
+	if err != nil{
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (s *server) GetSkinList(_ context.Context, playerID *pb.PlayerID) (*pb.SkinList, error){
+	playerSkins, err := GetSkinByID(int(playerID.GetID()))
+	if err != nil {
+		return nil, err
+	}
+	return playerSkins, nil
+}
+
+//  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@!!!!!!!!@!@!@!@!!!!!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+//func (s *server) Connect(_ context.Context, in *pb.NewPlayerName) (*pb.PlayerInfo, error) {
+//	name := in.Name												// each user need an uuid for their connection, later merge to their account
+//	id := uuid.New()
+//	AddPlayer(id, name)
+//	return &pb.PlayerInfo{Name: name, Uuid: id.String()}, nil
+//}
 
 func (s *server) NewRoom(_ context.Context, in *pb.NewGameInfo) (*pb.RoomID, error) {
-	lock.Lock()
+	lock.Lock()													// each room will be initialized with a locker, max score of game, then add to the global list of all room
 	defer lock.Unlock()
 
 	newRoom := &Room{
@@ -98,8 +158,8 @@ func (s *server) NewRoom(_ context.Context, in *pb.NewGameInfo) (*pb.RoomID, err
 }
 
 func (s *server) JoinRoom(_ context.Context, in *pb.JoinRequest) (*pb.RoomID, error){
-	roomID := in.RoomID
-	if roomID == ""{
+	roomID := in.RoomID																				// take the roomID and join, if empty, then server will find it
+	if roomID == ""{																				// case empty: find an empty room in the room list
 		for _, singleRoom := range rooms{
 			if len(singleRoom.roomPlayers) != int(singleRoom.maxPlayer) {
 				singleRoom.roomPlayers = append(singleRoom.roomPlayers, in.PlayerInfo.Uuid)
@@ -110,29 +170,12 @@ func (s *server) JoinRoom(_ context.Context, in *pb.JoinRequest) (*pb.RoomID, er
 		return &pb.RoomID{UniqueID: roomID}, nil
 	}
 
-	if RoomExists(in.RoomID ) {
+	if RoomExists(in.RoomID ) {																		// case found
 		AddPlayerToRoom(in.PlayerInfo.Uuid, in.RoomID)
 		return &pb.RoomID{UniqueID: in.RoomID}, nil
 	}
 
-	return nil, errors.New("room does not exist")
-}
-
-func RoomExists(roomID string) bool {
-	lock.RLock()
-	defer lock.RUnlock()
-	for _, singleRoom := range rooms {
-		if singleRoom.ID.String() == roomID {
-			return true
-		}
-	}
-	return false
-}
-
-func AddPlayerToRoom(playerID string, roomID string)  {
-	rooms[roomID].WaitGroup.Add(1)
-	defer rooms[roomID].WaitGroup.Done()
-	rooms[roomID].roomPlayers = append(rooms[roomID].roomPlayers, playerID)
+	return nil, errors.New("room does not exist")												// case all room are full
 }
 
 func (s *server) GetPlayerList(context.Context, *pb.Empty) (*pb.PlayerList, error) {
@@ -149,31 +192,37 @@ func (s *server) GetPlayerList(context.Context, *pb.Empty) (*pb.PlayerList, erro
 
 func (s *server) GameStream(svr pb.AirHockeyService_GameStreamServer) error {
 	req, err := svr.Recv()
-
 	if err != nil {
 		return err
 	}
-	//hostID := GetHost(msg.RoomID)
 	outbox := make(chan pb.GameMessage, 100)
 	go ListenToClient(svr, outbox)
 
 	for {
 		select {
-		case outMsg := <-outbox:
+		//case <-svr.Context().Done():											// 1. GET interruption from client
+		//	RemoveInterruptPlayer()												// https://stackoverflow.com/questions/39825671/grpc-go-how-to-know-in-server-side-when-client-closes-the-connection
+		//	return nil
+		case outMsg := <-outbox:												// 2. HERE message from outbox
+			log.Print("Recv some message")
+
 			switch outMsg.GetAction().(type) {
-			case *pb.GameMessage_GameState :
+			case *pb.GameMessage_GameState :										// 2a. broadcast game state for: start game, end game, left room
 				BroadcastGameState(outMsg.GetGameState().RoomID, outMsg)
-			case *pb.GameMessage_EntityState:
+				log.Print("[GAME_STATE]")
+			case *pb.GameMessage_EntityState:										// 2b. broadcast entity position to player who is not host player
 				BroadcastToPlayer(outMsg.GetEntityState().RoomID, outMsg)
-				log.Print("having ENTITY")
-			case *pb.GameMessage_PlayerInput:
-				log.Print("Having INPUT")
+				log.Print("[ENTITY]")
+			case *pb.GameMessage_PlayerInput:										// 2c. broadcast game input from player to host
+				log.Print("[INPUT]")
 				hostID := GetHost(outMsg)
 				BroadcastToHost(hostID, outMsg)
-			case *pb.GameMessage_Empty:
-				//BroadcastGameState(outMsg.GetGameState().RoomID, outMsg)
+			case *pb.GameMessage_Empty:												// 2d. open connection to server need a empty message
+				log.Println("[Init] Hand shake message")
+			case nil:
+				log.Print("[NIL_ACTION] end of client")
 			}
-		case inMsg := <-players[req.Sender].channel:
+		case inMsg := <-players[req.Sender].channel:							// 3. SEND message to suitable channel
 			log.Print(players[req.Sender].channel)
 			err := svr.Send(&inMsg)
 			if err != nil {
@@ -181,96 +230,6 @@ func (s *server) GameStream(svr pb.AirHockeyService_GameStreamServer) error {
 			}
 		}
 	}
-}
-
-func GetHost(playerInput pb.GameMessage) string{
-	roomID := playerInput.GetPlayerInput().RoomID
-	for _, singleRoom := range rooms{
-		if singleRoom.ID.String() == roomID{
-			return singleRoom.host
-		}
-	}
-	return "Wrong room ID"
-}
-
-func BroadcastToHost(hostID string, msg pb.GameMessage){
-	lock.Lock()
-	defer lock.Unlock()
-	players[hostID].channel <- msg
-}
-
-func ListenToClient(svr pb.AirHockeyService_GameStreamServer, messages chan<- pb.GameMessage) {
-	for {
-		req, err := svr.Recv()
-		if err != nil{
-			log.Fatal(err)
-		}
-		messages <- *req
-	}
-}
-
-func BroadcastToPlayer(roomID string, msg pb.GameMessage) {
-
-	lock.Lock()
-	defer lock.Unlock()
-	for singleRoom := range rooms {
-		if singleRoom == roomID {
-			log.Printf("[Broadcast] Client " + msg.Sender)
-			for _, c := range rooms[roomID].roomPlayers {
-				log.Printf("[Broadcast] Found " + c + " in room")
-				log.Printf("[Broadcast] Adding the message to " + c + "'s channel.")
-				if c !=  msg.Sender{
-					players[c].channel <- msg
-				}
-			}
-		}
-	}
-}
-
-func BroadcastGameState(roomID string , msg pb.GameMessage) {
-	lock.Lock()
-	defer lock.Unlock()
-	for singleRoom := range rooms {
-		if singleRoom == roomID {
-			for _, c := range rooms[roomID].roomPlayers {
-				log.Printf("[Broadcast] Found " + c + " in room")
-				log.Printf("[Broadcast] Adding the GameState to " + c + "'s channel.")
-				players[c].channel <- msg
-			}
-		}
-	}
-}
-
-func ClientExists(userID string) bool {
-
-	lock.RLock()
-	defer lock.RUnlock()
-	for c := range players {
-		if c == userID {
-			return true
-		}
-	}
-
-	return false
-}
-
-func RemovePlayerFromRoom(playerID string, roomID string) error {
-
-	for _, singleRoom := range rooms {
-		if singleRoom.ID.String() == roomID{
-			for i, singlePlayer := range singleRoom.roomPlayers {
-				if playerID == singlePlayer {
-					singleRoom.roomPlayers[i] = singleRoom.roomPlayers[len(singleRoom.roomPlayers) - 1]
-					singleRoom.roomPlayers = singleRoom.roomPlayers[:len(singleRoom.roomPlayers) - 1]
-				}
-			}
-			if len(singleRoom.roomPlayers) == 0 {
-				delete(rooms, roomID)
-			}
-		}
-	}
-
-	return errors.New("no user found in the group list. Something went wrong")
 }
 
 func (s *server) Disconnect(_ context.Context, playerInfo *pb.LeaveRequest) (*pb.Empty, error){
@@ -289,59 +248,22 @@ func (s *server) Disconnect(_ context.Context, playerInfo *pb.LeaveRequest) (*pb
 	return &pb.Empty{}, nil
 }
 
-func RemovePlayer(playerName string, roomID string) error{
+func (s *server) LeaveRoom(_ context.Context,leaveRequest *pb.LeaveRequest) (*pb.Empty, error){
 
-	lock.Lock()
-	defer lock.Unlock()
+	playerID := leaveRequest.PlayerInfo.Uuid
+	roomID := leaveRequest.RoomID
 
-	if ClientExists(playerName) {
-		delete(players, playerName)
-		log.Print("[RemovePlayer]: Removed Player " + playerName)
-		if InRoom(playerName) {
-			err := RemovePlayerFromRoom(playerName, roomID)
-			if err != nil {
-				return errors.New("err while remove player from room")
-			}
-		} else {
-			log.Print("[RemovePlayer]: " + playerName + " was not in any room.")
-			return nil
+	if !RoomExists(roomID) {
+		return &pb.Empty{}, errors.New("the room ID " + roomID + " doesn't exist")
+	} else if !ClientExists(playerID) {
+		return &pb.Empty{}, errors.New("the player ID " + playerID + " doesn't exist")
+	} else {
+		err := RemovePlayerFromRoom(playerID, roomID)
+		if err != nil {
+			return nil, err
 		}
+		return &pb.Empty{}, nil
 	}
-
-	return errors.New("[RemovePlayer]: Client (" + playerName + ") doesn't exist")
-}
-
-func InRoom(playerName string) bool {
-
-	for _, singleRoom := range rooms {
-		for _, p := range singleRoom.roomPlayers {
-			if playerName == p{
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 
-//func (s *server) LeaveRoom(_ context.Context,leaveRequest *pb.LeaveRequest) (*pb.Empty, error){
-//
-//	playerID := leaveRequest.PlayerInfo.Uuid
-//	roomID := leaveRequest.RoomID
-//	msg := pb.GameState{IsPlaying: 3, RoomID: roomID, ScoreTeam1: 0, ScoreTeam2: 0}
-//
-//	if !RoomExists(roomID) {
-//		return &pb.Empty{}, errors.New("the room ID " + roomID + " doesn't exist")
-//	} else if !ClientExists(playerID) {
-//		return &pb.Empty{}, errors.New("the player " + playerID + " doesn't exist")
-//	} else {
-//		die := pb.GameMessage{}
-//		BroadcastGameState(roomID, die)
-//		err := RemovePlayerFromRoom(playerID, roomID)
-//		if err != nil {
-//			return nil, err
-//		}
-//		return &pb.Empty{}, nil
-//	}
-//}

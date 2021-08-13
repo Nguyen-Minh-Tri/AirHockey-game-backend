@@ -4,20 +4,78 @@ package AirHockey;
 option go_package="/pb";
 
 service AirHockeyService{
-  // waiting list
-  rpc Connect(NewPlayerName) returns (PlayerInfo) {};
+  // new account & login
+  rpc NewAccount(NewAccountReq) returns (Empty){};
+  rpc Login(Account) returns (LoginPlayerInfo){};
+
+  // [abandoned] waiting list
+  //  rpc Connect(NewPlayerName) returns (PlayerInfo) {};                   // change to account online but still keeping for client testing
 
   // host and player in room + start -> play game
   rpc NewRoom(NewGameInfo) returns (RoomID){};
   rpc JoinRoom(JoinRequest) returns (RoomID){};
 
-  // in game stream actions
+  // in game
   rpc GameStream(stream GameMessage) returns (stream GameMessage){};
+  rpc NewRecord(Record) returns (RecordID){};
+  rpc UpdateRankAndCash(RankAndCash) returns (Empty){};
+  rpc AddSkin(AddNewSkin) returns (SkinList){};                          // processing 
 
-  // optional functions for player
-  rpc GetPlayerList(Empty) returns (PlayerList) {};
-//  rpc LeaveRoom(LeaveRequest) returns (Empty) {};
-  rpc Disconnect(LeaveRequest) returns (Empty) {};
+  // optional functions for clients
+  rpc GetPlayerList(Empty) returns (PlayerList){};
+  rpc LeaveRoom(LeaveRequest) returns (Empty){};
+  rpc Disconnect(LeaveRequest) returns (Empty){};
+  rpc GetGlobalRecord(Empty) returns (RankingList){};
+  rpc GetSkinList(PlayerID) returns (SkinList){};                           // not yet in server
+}
+
+message AddNewSkin{
+  string PlayerID = 1;
+  int32  SkinType = 2;
+  int32  SkinID   = 3;
+}
+
+message SkinList{
+  repeated int32 puckIDList = 1;
+  repeated int32 strikerIDList = 2;
+  repeated int32 tableIDList = 3;
+}
+
+message RankAndCash{
+  string PlayerName = 1;
+  string PlayerID   = 2;
+  int32  Cash       = 3;
+  int32  Rank       = 4;
+}
+
+message RankingList{
+  repeated PlayerRank rankingList = 1;
+}
+
+message PlayerRank{
+  string playerName = 1;
+  int32  rankScore  = 2;
+}
+
+message Record{
+  string recordTime = 1;
+  repeated string team1 = 2;
+  repeated string team2 = 3;
+  repeated int32  matchScore = 4;
+}
+
+message RecordID{
+  string uuid = 1;
+}
+
+message NewAccountReq{
+  string    name = 1;
+  Account   accountInfo = 2;
+}
+
+message Account{
+  string    userName = 1;
+  string    password = 2;
 }
 
 message GameMessage{
@@ -35,6 +93,7 @@ message PlayerInput{
   string sender = 2;
   string roomID = 3;
 }
+
 message EntityState{
   repeated ObjectState players = 1;
   ObjectState puck = 2;
@@ -58,8 +117,6 @@ message JoinRequest{
   string RoomID = 1;
   PlayerInfo playerInfo = 2;
 }
-
-
 
 message NewGameInfo{
   int32 numberOfPlayer = 1;
@@ -87,8 +144,6 @@ message Direction{
   bool RIGHT = 4;
 }
 
-
-
 message NewPlayerName{
   string name = 1;
 }
@@ -96,6 +151,17 @@ message NewPlayerName{
 message PlayerInfo{
   string name = 1;
   string uuid = 2;
+}
+
+message LoginPlayerInfo{
+  string name = 1;
+  string uuid = 2;
+  int32  cash = 3;
+  int32  rank = 4;
+}
+
+message PlayerID{
+  int32 ID = 1;
 }
 
 message PlayerList{
