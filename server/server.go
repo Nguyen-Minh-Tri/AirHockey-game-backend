@@ -37,13 +37,13 @@ type Player struct {
 }
 
 func main() {
-	port := ":50069"
+	port := ":8080"
 	lis, err := net.Listen("tcp", port)
 
 	if err != nil {
 		log.Fatalf("Failed to listen %v", err)
 	}
-	log.Println("Server opened port 50069")
+	log.Println("Server opened port 8080")
 	// Initializes the gRPC server.
 	s := grpc.NewServer()
 
@@ -58,8 +58,6 @@ func main() {
 		log.Fatalf("Failed to serve: %v", err)
 	}
 }
-//  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@!!!!!!!!@!@!@!@!!!!!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 
 func (s *server) NewAccount(_ context.Context, accountReq *pb.NewAccountReq) (*pb.Empty, error){
 	name := accountReq.Name
@@ -129,15 +127,6 @@ func (s *server) GetSkinList(_ context.Context, playerID *pb.PlayerID) (*pb.Skin
 	return playerSkins, nil
 }
 
-//  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~@!!!!!!!!@!@!@!@!!!!!!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-//func (s *server) Connect(_ context.Context, in *pb.NewPlayerName) (*pb.PlayerInfo, error) {
-//	name := in.Name												// each user need an uuid for their connection, later merge to their account
-//	id := uuid.New()
-//	AddPlayer(id, name)
-//	return &pb.PlayerInfo{Name: name, Uuid: id.String()}, nil
-//}
-
 func (s *server) NewRoom(_ context.Context, in *pb.NewGameInfo) (*pb.RoomID, error) {
 	lock.Lock()													// each room will be initialized with a locker, max score of game, then add to the global list of all room
 	defer lock.Unlock()
@@ -178,15 +167,14 @@ func (s *server) JoinRoom(_ context.Context, in *pb.JoinRequest) (*pb.RoomID, er
 	return nil, errors.New("room does not exist")												// case all room are full
 }
 
-func (s *server) GetPlayerList(context.Context, *pb.Empty) (*pb.PlayerList, error) {
+func (s *server) GetPlayerList(_ context.Context, roomID *pb.RoomID) (*pb.PlayerList, error) {
+	listID := rooms[roomID.UniqueID].roomPlayers
 	var c []string
-	for key := range players {
-		c = append(c, key)
+	for _, singleID := range listID{
+		c = append(c, players[singleID].name)
 	}
-
-	log.Print("[GetClientList]: Returned list of current Clients ")
+	log.Print("[GetPlayerList]: Returned list of current Clients ")
 	log.Print(c)
-
 	return &pb.PlayerList{Players: c}, nil
 }
 
@@ -200,30 +188,25 @@ func (s *server) GameStream(svr pb.AirHockeyService_GameStreamServer) error {
 
 	for {
 		select {
-		//case <-svr.Context().Done():											// 1. GET interruption from client
-		//	RemoveInterruptPlayer()												// https://stackoverflow.com/questions/39825671/grpc-go-how-to-know-in-server-side-when-client-closes-the-connection
-		//	return nil
-		case outMsg := <-outbox:												// 2. HERE message from outbox
-			log.Print("Recv some message")
-
+		case outMsg := <-outbox:												// 1. HERE message from outbox
 			switch outMsg.GetAction().(type) {
-			case *pb.GameMessage_GameState :										// 2a. broadcast game state for: start game, end game, left room
+			case *pb.GameMessage_GameState :										// 1a. broadcast game state for: start game, end game, left room
 				BroadcastGameState(outMsg.GetGameState().RoomID, outMsg)
-				log.Print("[GAME_STATE]")
-			case *pb.GameMessage_EntityState:										// 2b. broadcast entity position to player who is not host player
+				//log.Print("[GAME_STATE]")
+			case *pb.GameMessage_EntityState:										// 1b. broadcast entity position to player who is not host player
 				BroadcastToPlayer(outMsg.GetEntityState().RoomID, outMsg)
-				log.Print("[ENTITY]")
-			case *pb.GameMessage_PlayerInput:										// 2c. broadcast game input from player to host
-				log.Print("[INPUT]")
+				//log.Print("[ENTITY] message", outMsg.GetEntityState().RoomID)
+			case *pb.GameMessage_PlayerInput:										// 1c. broadcast game input from player to host
 				hostID := GetHost(outMsg)
-				BroadcastToHost(hostID, outMsg)
-			case *pb.GameMessage_Empty:												// 2d. open connection to server need a empty message
-				log.Println("[Init] Hand shake message")
+				BroadcastToSpecificClient(hostID, outMsg)
+			case *pb.GameMessage_Empty:												// 1d. client interruption
+				//log.Println("[Init] Interruption from client")
+				BroadcastToSpecificClient(outMsg.Sender, outMsg)
 			case nil:
-				log.Print("[NIL_ACTION] end of client")
+				//log.Print("[NIL_ACTION] end of client")
 			}
-		case inMsg := <-players[req.Sender].channel:							// 3. SEND message to suitable channel
-			log.Print(players[req.Sender].channel)
+		case inMsg := <-players[req.Sender].channel:							// 2. SEND message to suitable channel
+			//log.Print("[CHANEL]",players[req.Sender].channel)
 			err := svr.Send(&inMsg)
 			if err != nil {
 				return err
@@ -234,10 +217,10 @@ func (s *server) GameStream(svr pb.AirHockeyService_GameStreamServer) error {
 
 func (s *server) Disconnect(_ context.Context, playerInfo *pb.LeaveRequest) (*pb.Empty, error){
 
-	playerName := playerInfo.PlayerInfo.Name
+	playerName := playerInfo.PlayerInfo.Uuid
 	roomID := playerInfo.RoomID
 
-	log.Print("[Disconnect]: Unregistering player " + playerName)
+	log.Print("[Disconnect]: Disconnecting player " + playerName)
 
 	err := RemovePlayer(playerName, roomID)
 
@@ -249,21 +232,24 @@ func (s *server) Disconnect(_ context.Context, playerInfo *pb.LeaveRequest) (*pb
 }
 
 func (s *server) LeaveRoom(_ context.Context,leaveRequest *pb.LeaveRequest) (*pb.Empty, error){
+	log.Printf("[LeaveRoom]start leave room")
 
 	playerID := leaveRequest.PlayerInfo.Uuid
 	roomID := leaveRequest.RoomID
 
 	if !RoomExists(roomID) {
+		log.Printf("[LeaveRoom]no room exist with ID")
 		return &pb.Empty{}, errors.New("the room ID " + roomID + " doesn't exist")
 	} else if !ClientExists(playerID) {
-		return &pb.Empty{}, errors.New("the player ID " + playerID + " doesn't exist")
-	} else {
-		err := RemovePlayerFromRoom(playerID, roomID)
-		if err != nil {
-			return nil, err
-		}
-		return &pb.Empty{}, nil
+		log.Printf("[LeaveRoom]no client exist with ID")
+		return &pb.Empty{}, errors.New("the player ID " + playerID + " doesn't exists")
 	}
+
+	err := RemovePlayerFromRoom(playerID, roomID)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.Empty{}, nil
 }
 
 

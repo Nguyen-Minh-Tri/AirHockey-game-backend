@@ -48,23 +48,22 @@ func GetHost(playerInput pb.GameMessage) string{
 	return "Wrong room ID"
 }
 
-func BroadcastToHost(hostID string, msg pb.GameMessage){
+func BroadcastToSpecificClient(clientID string, msg pb.GameMessage){
 	lock.Lock()
 	defer lock.Unlock()
-	players[hostID].channel <- msg
+	players[clientID].channel <- msg
 }
 
 func ListenToClient(svr pb.AirHockeyService_GameStreamServer, messages chan<- pb.GameMessage) {
 	for {
 		req, err := svr.Recv()
 		if err == io.EOF {
-			messages <- pb.GameMessage{
-				Sender: req.Sender,
-				Action: nil,
-			}
+			log.Printf("[ListenToClient] A player had been disconnected")
+			return
 		}
 		if err != nil{
 			log.Print(err)
+			return
 		}else {
 			messages <- *req
 		}
@@ -123,11 +122,13 @@ func RemovePlayerFromRoom(playerID string, roomID string) error {
 				if playerID == singlePlayer {
 					singleRoom.roomPlayers[i] = singleRoom.roomPlayers[len(singleRoom.roomPlayers) - 1]
 					singleRoom.roomPlayers = singleRoom.roomPlayers[:len(singleRoom.roomPlayers) - 1]
+					if len(singleRoom.roomPlayers) == 0 {
+						delete(rooms, roomID)
+					}
+					return nil
 				}
 			}
-			if len(singleRoom.roomPlayers) == 0 {
-				delete(rooms, roomID)
-			}
+
 		}
 	}
 
@@ -136,8 +137,6 @@ func RemovePlayerFromRoom(playerID string, roomID string) error {
 
 func RemovePlayer(playerName string, roomID string) error{
 
-	lock.Lock()
-	defer lock.Unlock()
 
 	if ClientExists(playerName) {
 		delete(players, playerName)

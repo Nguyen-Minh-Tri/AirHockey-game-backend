@@ -1,9 +1,5 @@
 package model
 
-import (
-	_ "sync"
-)
-
 type User struct {
 	PlayerID   string   `bson:"playerID"`
 	Name       string   `bson:"name"`

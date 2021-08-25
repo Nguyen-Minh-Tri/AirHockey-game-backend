@@ -22,7 +22,7 @@ service AirHockeyService{
   rpc AddSkin(AddNewSkin) returns (SkinList){};                          // processing 
 
   // optional functions for clients
-  rpc GetPlayerList(Empty) returns (PlayerList){};
+  rpc GetPlayerList(RoomID) returns (PlayerList){};
   rpc LeaveRoom(LeaveRequest) returns (Empty){};
   rpc Disconnect(LeaveRequest) returns (Empty){};
   rpc GetGlobalRecord(Empty) returns (RankingList){};
@@ -138,10 +138,23 @@ message ObjectState{
 }
 
 message Direction{
+  oneof input{
+    KeyboardInput keyboardInput = 1;
+    MouseInput    mouseInput    = 2;
+  }
+}
+
+message KeyboardInput{
   bool UP = 1;
   bool DOWN = 2;
   bool LEFT = 3;
   bool RIGHT = 4;
+}
+
+message MouseInput{
+  float X = 1;
+  float Y = 2;
+  bool  isClicked = 3;
 }
 
 message NewPlayerName{
